@@ -1,0 +1,147 @@
+#include <SPI.h>
+#include <MFRC522.h>
+
+// L298N motor driver pins
+const int LeftMotorForward  = 5;
+const int LeftMotorBackward = 6;
+const int RightMotorForward = 7;
+const int RightMotorBackward = 8;
+
+// RC522 RFID pins
+#define SS_PIN 10
+#define RST_PIN 9
+
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+// RFID tag UID
+const byte targetUID[] = {0x8C, 0x31, 0x33, 0x02};
+const byte targetUIDSize = sizeof(targetUID);
+
+// Ultrasonic sensor pins
+const int trigPin = 2;
+const int echoPin = 3;
+
+// Buzzer pin
+const int buzzerPin = 4;
+
+// Obstacle distance in cm
+const int obstacleDistance = 20;
+
+void setup() {
+  Serial.begin(9600);
+
+  SPI.begin();
+  rfid.PCD_Init();
+  delay(100);
+
+  pinMode(LeftMotorForward, OUTPUT);
+  pinMode(LeftMotorBackward, OUTPUT);
+  pinMode(RightMotorForward, OUTPUT);
+  pinMode(RightMotorBackward, OUTPUT);
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(buzzerPin, OUTPUT);
+
+  digitalWrite(buzzerPin, LOW);
+  moveStop();
+
+  Serial.println("RFID Trolley Ready");
+  Serial.println("Place the correct tag near RC522");
+}
+
+void loop() {
+  bool correctTagDetected = false;
+
+  // RFID detection - existing logic retained
+  byte atqa[2];
+  byte atqaSize = sizeof(atqa);
+
+  MFRC522::StatusCode status =
+      rfid.PICC_WakeupA(atqa, &atqaSize);
+
+  if (status == MFRC522::STATUS_OK) {
+    if (rfid.PICC_ReadCardSerial()) {
+
+      Serial.print("UID: ");
+
+      for (byte i = 0; i < rfid.uid.size; i++) {
+        if (rfid.uid.uidByte[i] < 0x10) {
+          Serial.print("0");
+        }
+        Serial.print(rfid.uid.uidByte[i], HEX);
+        Serial.print(" ");
+      }
+      Serial.println();
+
+      if (rfid.uid.size == targetUIDSize) {
+        correctTagDetected = true;
+
+        for (byte i = 0; i < targetUIDSize; i++) {
+          if (rfid.uid.uidByte[i] != targetUID[i]) {
+            correctTagDetected = false;
+            break;
+          }
+        }
+      }
+
+      rfid.PICC_HaltA();
+      rfid.PCD_StopCrypto1();
+    }
+  }
+
+  // Existing trolley movement logic
+  if (correctTagDetected) {
+    Serial.println("Correct tag detected - MOVING");
+    moveForward();
+  } else {
+    Serial.println("Tag not detected or wrong tag - STOPPED");
+    moveStop();
+  }
+
+  // Added ultrasonic sensor and buzzer
+  float distance = getDistance();
+
+  if (distance > 0 && distance <= obstacleDistance) {
+    digitalWrite(buzzerPin, HIGH);
+    Serial.println("Obstacle detected! Buzzer ON");
+  } else {
+    digitalWrite(buzzerPin, LOW);
+  }
+
+  delay(100);
+}
+
+float getDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  // Timeout prevents long blocking if no echo is received
+  unsigned long duration = pulseIn(echoPin, HIGH, 25000);
+
+  if (duration == 0) {
+    return -1;
+  }
+
+  return duration * 0.0343 / 2.0;
+}
+
+void moveForward() {
+  digitalWrite(LeftMotorForward, HIGH);
+  digitalWrite(LeftMotorBackward, LOW);
+
+  digitalWrite(RightMotorForward, HIGH);
+  digitalWrite(RightMotorBackward, LOW);
+}
+
+void moveStop() {
+  digitalWrite(LeftMotorForward, LOW);
+  digitalWrite(LeftMotorBackward, LOW);
+
+  digitalWrite(RightMotorForward, LOW);
+  digitalWrite(RightMotorBackward, LOW);
+}
