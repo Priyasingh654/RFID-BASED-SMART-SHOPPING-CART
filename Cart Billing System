@@ -1,0 +1,298 @@
+#include <SPI.h>
+#include <MFRC522.h>
+#include <LiquidCrystal_I2C.h>
+
+// LCD
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Buttons
+const int remove_button = 2;
+const int add_button = 3;
+const int reset_button = 4;
+
+// Buzzer and LED
+const int buzzer_Pin = 5;
+const int ledPin = 6;
+
+// Bill alert threshold
+const int bill_limit = 500;
+
+// RFID pins
+#define SS_PIN 10
+#define RST_PIN 9
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+
+// Item structure
+struct item {
+  String item_name;
+  String item_number;
+  int item_price;
+};
+
+// Item database
+const int number_of_item = 3;
+
+const item item_list[number_of_item] = {
+  {"Milk Powder", "23 EA C7 D9", 200},
+  {"Salt",        "43 18 27 DA", 100},
+  {"Ball Pen",    "C6 80 32 02", 50}
+};
+
+// Billing and quantity
+int bill_amount = 0;
+int total_quantity = 0;
+int item_quantity[number_of_item] = {0, 0, 0};
+
+// Mode flags
+int add_item_flag = 1;
+int remove_item_flag = 0;
+
+// Button states
+bool lastAddState = HIGH;
+bool lastRemoveState = HIGH;
+bool lastResetState = HIGH;
+
+// LED alert function
+void updateLED() {
+  if (bill_amount > bill_limit) {
+    digitalWrite(ledPin, HIGH);
+  } else {
+    digitalWrite(ledPin, LOW);
+  }
+}
+
+// Display total bill and quantity
+void showTotal() {
+  updateLED();
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Total Items: ");
+  lcd.print(total_quantity);
+
+  lcd.setCursor(0, 1);
+  lcd.print("Total: ");
+  lcd.print(bill_amount);
+  lcd.print(" Rs");
+
+  Serial.print("Total Quantity: ");
+  Serial.println(total_quantity);
+
+  Serial.print("Total Bill: Rs ");
+  Serial.println(bill_amount);
+
+  if (bill_amount > bill_limit) {
+    Serial.println("ALERT: Bill exceeds Rs 500!");
+  }
+}
+
+// Buzzer
+void beep() {
+  digitalWrite(buzzer_Pin, HIGH);
+  delay(200);
+  digitalWrite(buzzer_Pin, LOW);
+}
+
+void setup() {
+  pinMode(remove_button, INPUT_PULLUP);
+  pinMode(add_button, INPUT_PULLUP);
+  pinMode(reset_button, INPUT_PULLUP);
+
+  pinMode(buzzer_Pin, OUTPUT);
+  pinMode(ledPin, OUTPUT);
+
+  digitalWrite(buzzer_Pin, LOW);
+  digitalWrite(ledPin, LOW);
+
+  Serial.begin(9600);
+
+  SPI.begin();
+  mfrc522.PCD_Init();
+
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Trolley");
+  lcd.setCursor(0, 1);
+  lcd.print("Billing System");
+  delay(2000);
+
+  lcd.clear();
+  lcd.print("Add your items");
+
+  Serial.println("Smart Trolley Started");
+  Serial.println("Scan an RFID tag");
+}
+
+void loop() {
+  // Read buttons: LOW means pressed
+  bool addState = digitalRead(add_button);
+  bool removeState = digitalRead(remove_button);
+  bool resetState = digitalRead(reset_button);
+
+  // Add mode
+  if (addState == LOW && lastAddState == HIGH) {
+    add_item_flag = 1;
+    remove_item_flag = 0;
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("ADD MODE");
+    lcd.setCursor(0, 1);
+    lcd.print("Scan your item");
+    delay(300);
+  }
+
+  // Remove mode
+  if (removeState == LOW && lastRemoveState == HIGH) {
+    add_item_flag = 0;
+    remove_item_flag = 1;
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("REMOVE MODE");
+    lcd.setCursor(0, 1);
+    lcd.print("Scan your item");
+    delay(300);
+  }
+
+  // Reset trolley
+  if (resetState == LOW && lastResetState == HIGH) {
+    bill_amount = 0;
+    total_quantity = 0;
+
+    for (int i = 0; i < number_of_item; i++) {
+      item_quantity[i] = 0;
+    }
+
+    updateLED();
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Trolley Reset");
+    lcd.setCursor(0, 1);
+    lcd.print("Data Cleared");
+
+    Serial.println("Trolley data reset");
+
+    beep();
+    delay(1200);
+    showTotal();
+    delay(1000);
+  }
+
+  lastAddState = addState;
+  lastRemoveState = removeState;
+  lastResetState = resetState;
+
+  // Check for RFID card
+  if (!mfrc522.PICC_IsNewCardPresent()) {
+    delay(30);
+    return;
+  }
+
+  if (!mfrc522.PICC_ReadCardSerial()) {
+    return;
+  }
+
+  // Read RFID UID
+  String content = "";
+
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    if (i > 0) {
+      content += " ";
+    }
+
+    if (mfrc522.uid.uidByte[i] < 0x10) {
+      content += "0";
+    }
+
+    content += String(mfrc522.uid.uidByte[i], HEX);
+  }
+
+  content.toUpperCase();
+
+  Serial.print("Scanned UID: ");
+  Serial.println(content);
+
+  bool itemFound = false;
+
+  for (int i = 0; i < number_of_item; i++) {
+    if (content == item_list[i].item_number) {
+      itemFound = true;
+
+      // ADD ITEM
+      if (add_item_flag == 1) {
+        item_quantity[i]++;
+        total_quantity++;
+        bill_amount += item_list[i].item_price;
+
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(item_list[i].item_name);
+        lcd.setCursor(0, 1);
+        lcd.print("Qty: ");
+        lcd.print(item_quantity[i]);
+
+        Serial.println("Item added");
+
+        beep();
+      }
+
+      // REMOVE ITEM
+      else if (remove_item_flag == 1) {
+        if (item_quantity[i] > 0) {
+          item_quantity[i]--;
+          total_quantity--;
+          bill_amount -= item_list[i].item_price;
+
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print(item_list[i].item_name);
+          lcd.setCursor(0, 1);
+          lcd.print("Qty: ");
+          lcd.print(item_quantity[i]);
+
+          Serial.println("Item removed");
+
+          beep();
+        } else {
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("Item not added!");
+          lcd.setCursor(0, 1);
+          lcd.print("Cannot remove");
+
+          Serial.println("Cannot remove: quantity is zero");
+          delay(1000);
+        }
+      }
+
+      break;
+    }
+  }
+
+  if (!itemFound) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Unknown item!");
+
+    Serial.println("RFID not registered");
+    delay(1000);
+  }
+
+  // Update LED immediately after billing changes
+  updateLED();
+
+  // Show total quantity and bill
+  showTotal();
+  delay(1500);
+
+  // Finish RFID transaction
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
+
+  delay(500);
+}
